@@ -1,3 +1,7 @@
+"""UNet backbone for DDPM.
+
+Ref: Ref: https://github.com/hojonathanho/diffusion/diffusion_tf/models/unet.py
+"""
 import math
 import tensorflow as tf
 
@@ -26,7 +30,7 @@ class TimeEmbedding(tf.keras.layers.Layer):
     """Computes the time embeddings.
 
     Args:
-      time (Tensor): tensor of shape [batch_size], the time step indieces.
+      time (Tensor): float tensor of shape [batch_size], the time step indices.
 
     Returns:
       outputs (Tensor): tensor of shape [batch_size, num_channels], the time
@@ -35,7 +39,7 @@ class TimeEmbedding(tf.keras.layers.Layer):
     num_channels = self._num_channels // 8
     outputs = math.log(10000) / (num_channels - 1)
     outputs = tf.exp(tf.range(num_channels, dtype="float32") * -outputs)
-    outputs = tf.cast(time, "float32")[:, tf.newaxis] * outputs[tf.newaxis]
+    outputs = time[:, tf.newaxis] * outputs[tf.newaxis]
     outputs = tf.concat([tf.sin(outputs), tf.cos(outputs)], axis=1)
     if self._num_channels % 2 == 1:
       outputs = tf.pad(outputs, [[0, 0], [0, 1]])
@@ -44,7 +48,6 @@ class TimeEmbedding(tf.keras.layers.Layer):
     outputs = self._dense2(outputs)
 
     batch_size = time.shape[0]
-    assert outputs.shape == [batch_size, self._num_channels]
     return outputs
 
 
@@ -114,7 +117,6 @@ class ResidualBlock(tf.keras.layers.Layer):
     if inputs.shape[-1] != self._num_channels:
       inputs = self._shortcut(inputs)
 
-    assert inputs.shape == outputs.shape
     outputs = outputs + inputs
     return outputs
 
@@ -154,7 +156,6 @@ class AttentionBlock(tf.keras.layers.Layer):
         num_channels].
     """
     batch_size, height, width = inputs.shape[:3]
-
     outputs = self._group_norm(inputs)
 
     # [batch_size, height, width, num_channels]
@@ -176,7 +177,6 @@ class AttentionBlock(tf.keras.layers.Layer):
     )
     outputs = tf.einsum("bhwHW,bHWc->bhwc", attention_weights, v)
     outputs = self._dense_output(outputs) 
-    assert inputs.shape == outputs.shape
     outputs = outputs + inputs
     return outputs
 
@@ -434,7 +434,7 @@ class UNet(tf.keras.layers.Layer):
     Args:
       inputs (Tensor): input image of shape [batch_size, image_height,
         image_width, num_image_channels].
-      time (Tensor): tensor of shape [batch_size], the time step indieces.
+      time (Tensor): tensor of shape [batch_size], the time step indices.
       training (bool): True if in training mode.
 
     Returns:
@@ -461,56 +461,3 @@ class UNet(tf.keras.layers.Layer):
 
     outputs = self._conv_out(self._activation(self._group_norm(outputs)))
     return outputs
-
-
-if __name__ == "__main__":
-  import numpy as np
-
-
-  """
-  unet = UNet(attention_resolutions=(16,))
-  ckpt = tf.train.Checkpoint(model=unet)
-  ckpt_reader = tf.train.load_checkpoint("diffusion_cifar10_model/model.ckpt-790000")
- 
-  weights = [] 
-  with open("diffusion_cifar10_model/kv") as f:
-    for line in f:
-      line = line.strip()
-      if not len(line):
-        continue
-      weights.append(ckpt_reader.get_tensor(line.split(" ")[0]))
-
-  inputs = tf.constant(np.random.uniform(-1, 1, (50, 32, 32, 3)).astype("float32"))
-  time = tf.constant(np.arange(50).astype("float32"))
-  unet(inputs, time, training=False)
-  unet.set_weights(weights)
-  out = unet(inputs, time, training=False) 
-
-  ckpt.save("cifar10")
-
-  #"""
-
-
-  #"""
-  model = UNet(attention_resolutions=(16,), multipliers=(1, 1, 2, 2, 4, 4))
-  ckpt = tf.train.Checkpoint(model=model)
-  ckpt_reader = tf.train.load_checkpoint("diffusion_lsun_bedroom_model/model.ckpt-2388000")
-
-  weights = []
-  with open("diffusion_celeba_hq_model/kv") as f:
-    for line in f:
-      line = line.strip()
-      if not len(line):
-        continue
-      weights.append(ckpt_reader.get_tensor(line.split(" ")[0]))
-
-  inputs = tf.constant(np.random.uniform(-1, 1, (2, 256, 256, 3)).astype("float32"))
-  time = tf.constant(np.arange(2).astype("float32"))
-  model(inputs, time, training=False)
-  model.set_weights(weights)
-  out = model(inputs, time, training=False)
-
-  ckpt.save("lsun_bedroom")
-  #"""
-  
-

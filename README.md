@@ -51,42 +51,13 @@ for training your own DDPM model.
 ### Samples of generated images
 
 <p align="center">
-  <img src="assets/celeb.png" width="1200">
+  <img src="samples/cifar10.jpg" width="1200">
 
   <br>
-  Progressive sampling of CelebaHQ images
+  Samples of CIFAR10 images
+
 </p>
 
 
-<p align="center">
-  <img src="assets/bedroom.png" width="1200">
+See [more samples]("samples/")
 
-  <br>
-  Progressive sampling of LSUN bedroom images
-</p>
-
-
-<p align="center">
-  <img src="assets/church.png" width="1200">
-
-  <br>
-  Progressive sampling of LSUN church images
-</p>
-
-
-<p align="center">
-  <img src="assets/cat.png" width="1200">
-
-  <br>
-  Progressive sampling of LSUN cat images
-</p>
-
-Note: for each series of progressive samples (4 in each dataset), the first row is the progressively denoised image, while the second row is the predicted original image.
-
-
-<p align="center">
-  <img src="assets/interpolate.png" width="1200">
-
-  <br>
-  Samples generated from interpolated latents using DDIM.
-</p>

@@ -10,6 +10,7 @@ batch_size = 4
 SHUFFLE_SIZE = 8192 
 
 def create_celebeahq256_dataset(dir_paths, image_size, batch_size, epochs=16, flip=False):
+  """Create dataset for celeba hq dataset or LSUN dataset."""
   filenames = []
   for dir_path in dir_paths:
     filenames.extend(glob.glob(os.path.join(dir_path, "*.jpg")))
@@ -28,6 +29,7 @@ def create_celebeahq256_dataset(dir_paths, image_size, batch_size, epochs=16, fl
 
 
 def create_cifar10_dataset(batch_size, epochs=16, flip=False):
+  """Create CIFAR10 dataset."""
   (x_train, y_train), _ = tf.keras.datasets.cifar10.load_data()
   dataset = tf.data.Dataset.from_tensor_slices(x_train).repeat(epochs)
 

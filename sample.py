@@ -77,6 +77,8 @@ def main(_):
           shape, record_freq=FLAGS.record_freq)
       np.save("sample_prog", to_image(sample_prog.numpy()))
       np.save("pred_x0_prog", to_image(pred_x0_prog.numpy()))
+      print("Intermediate results saved to `sample_prog.npy` (x_{t-1}) and "
+          "`pred_x0_png` (predicted x_0)")
     elif FLAGS.interpolate:
       images = sampler.ddim_interpolate(shape[1:])
     else:
@@ -95,10 +97,13 @@ def main(_):
       images, sample_prog, pred_x0_prog = sampler.p_sample_loop_progressive(shape)
       np.save("sample_prog", to_image(sample_prog.numpy()))
       np.save("pred_x0_prog", to_image(pred_x0_prog.numpy()))
+      print("Intermediate results saved to `sample_prog.npy` (x_{t-1}) and "
+          "`pred_x0_png` (predicted x_0)")
     else:
       images = sampler.p_sample_loop(shape)
 
   np.save("images", to_image(images.numpy()))
+  print("Sampled images saved to `images.npy`")
 
 
 if __name__  == "__main__":

@@ -1,0 +1,19 @@
+
+image_channels: 3
+image_size: 32
+num_channels: 128
+channel_multipliers: [1, 2, 2, 2]
+attention_resolutions: [16]
+num_steps: 1000
+batch_size: 128
+epochs: 2048
+grad_clip: 1.
+learning_rate: 2.e-4
+warmup: 5000
+ema_decay: 0.9999
+flip: True
+beta_start: 0.0001
+beta_end: 0.02
+dropout: 0.1
+model_var_type: fixed_large
+

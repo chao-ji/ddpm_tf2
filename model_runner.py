@@ -29,8 +29,16 @@ def _extract(data, t):
   return outputs
 
 
-class DenoiseDiffusion(object):
-  """DDPM model."""
+def slerp(z1, z2, alpha):
+  theta = tf.acos(tf.reduce_sum(z1 * z2) / (tf.norm(z1) * tf.norm(z2)))
+  return (
+      tf.sin((1 - alpha) * theta) / tf.sin(theta) * z1
+      + tf.sin(alpha * theta) / tf.sin(theta) * z2
+  )
+
+
+class _DDPM(object):
+  """Base model to be subclassed by DDPM trainer, sampler, and DDIM sampler."""
   def __init__(
       self,
       model,
@@ -46,6 +54,9 @@ class DenoiseDiffusion(object):
       beta_start (float): start of beta schedule.
       beta_end (float): end of beta schedule.
       num_steps (int): the number of diffusion steps (`T`).
+      model_var_type (str): type of variances (`sigma^{2}_t`). "fixed_large"
+        refers to `beta_t`, and `fixed_small` refers to scaled `beta_t` that is
+        smaller. See Section 3.2 of DDPM paper.
     """
     self._model = model
     self._beta_start = beta_start
@@ -79,28 +90,9 @@ class DenoiseDiffusion(object):
     self._log_betas_clipped = tf.math.log(
         tf.concat([[self._posterior_variance[1]], self._betas[1:]], axis=0))
 
-  def q_sample(self, x0, t, eps):
-    """Sample a noised version of `x0` (original image) according to `t` (
-    sampled time steps), i.e. `q(x_t | x_0)`. `t` contains integers sampled from
-    0, 1, ..., num_steps - 1, so 0 means 1 diffusion step, and so on.
 
-    Args:
-      x0 (Tensor): tensor of shape [batch_size, height, width, 3], the original
-        image.
-      t (Tensor): int tensor of shape [batch_size], time steps in a batch.
-      eps (Tensor): tensor of shape [batch_size, height, width, 3], noise from
-        prior distribution.
-
-    Returns:
-      xt (Tensor): tensor of shape [batch_size, height, width, 3], noised
-        version of `x0`.
-    """
-    xt = (
-        _extract(self._sqrt_alphas_cumprod, t) * x0 +
-        _extract(self._sqrt_one_minus_alphas_cumprod, t) * eps 
-    )
-    return xt
-
+class DDPMSampler(_DDPM):
+  """DDPM sampler."""
   def _predict_x0_from_eps(self, xt, t, eps):
     """Predict `x0` from epsilon by rearranging the following equation:
 
@@ -186,7 +178,7 @@ class DenoiseDiffusion(object):
     return model_mean, model_log_variance, pred_x0
 
   def p_sample(self, xt, t, clip_denoised=True, return_pred_x0=False):
-    """Sample a denoised version for one time step.
+    """Sample a less noisy version of `xt` (i.e. x_{t-1})for one time step.
 
     Args:
       xt (Tensor): tensor of shape [batch_size, height, width, 3], noised
@@ -197,7 +189,7 @@ class DenoiseDiffusion(object):
 
     Returns:
       sample (Tensor): tensor of shape [batch_size, height, width, 3], a
-        *less noisy* version of `xt`.
+        less noisy version of `xt`.
       pred_x0 (Tensor): tensor of shape [batch_size, height, width, 3], the
         predicted `x0` in the process.
     """
@@ -223,7 +215,8 @@ class DenoiseDiffusion(object):
       shape (tuple): shape of the image (i.e. [batch_size, height, width, 3])
 
     Returns:
-      x_final (Tensor)
+      x_final (Tensor): tensor of shape [batch_size, height, width, 3], the
+        final version of sampled image.
     """
     # decrement `t` from num_steps - 1 to 0, inclusively
     t = tf.constant(self._num_steps - 1, dtype="int32")
@@ -232,11 +225,11 @@ class DenoiseDiffusion(object):
     x_final = tf.nest.map_structure(
         tf.stop_gradient,
         tf.while_loop(
-          cond=lambda i, _: tf.greater_equal(i, 0),
-          body=lambda i, img: [
-              i - 1,
+          cond=lambda t, _: tf.greater_equal(t, 0),
+          body=lambda t, xt: [
+              t - 1,
               self.p_sample(
-                  xt=img, t=tf.fill([shape[0]], i), return_pred_x0=False,
+                  xt=xt, t=tf.fill([shape[0]], t), return_pred_x0=False,
               )
           ],
           loop_vars=[t, xt],
@@ -245,45 +238,94 @@ class DenoiseDiffusion(object):
     )[1]
     return x_final
 
-  def p_sample_loop_progressive(self, shape, include_pred_x0_freq=50):
+  def p_sample_loop_progressive(self, shape, record_freq=50):
+    """Same as `p_sample_loop`, except that we record the intermediate results
+    of sampling.
+
+    Args:
+      shape (tuple): shape of the image (i.e. [batch_size, height, width, 3])
+      record_freq (int): the frequence with which to store the intermediate
+        results.
+
+    Returns:
+      x_final (Tensor): tensor of shape [batch_size, height, width, 3], the
+        final version of sampled image.
+      sample_prog_final (Tensor): tensor of shape [batch_size, num_records,
+        height, width, 3], the records of intermediate samples (sampled
+        `x_{t-1}` from `xt` and `t`).
+      pred_x0_prog_final (Tensor): tensor of shape [batch_size, num_records,
+        height, width, 3], the records of predicted `x0`.
+    """
     t = tf.constant(self._num_steps - 1, dtype="int32")
     xt = tf.random.normal(shape)
 
-    num_recorded_pred_x0 = self._num_steps // include_pred_x0_freq
-    progress = tf.zeros(
-        [shape[0], num_recorded_pred_x0, *shape[1:]], dtype="float32")
+    num_records = self._num_steps // record_freq
+    sample_progress = tf.zeros(
+        [shape[0], num_records, *shape[1:]], dtype="float32")
+    pred_x0_progress = tf.zeros(
+        [shape[0], num_records, *shape[1:]], dtype="float32")
 
-    def _loop_body(i, img, progress):
+    def _loop_body(t, xt, sample_progress, pred_x0_progress):
       sample, pred_x0 = self.p_sample(
-        xt=img, t=tf.fill([shape[0]], i), return_pred_x0=True)
-      insert_mask = tf.equal(tf.math.floordiv(i, include_pred_x0_freq),
-                             tf.range(num_recorded_pred_x0, dtype="int32"))
+        xt=xt, t=tf.fill([shape[0]], t), return_pred_x0=True)
+      insert_mask = tf.equal(tf.math.floordiv(t, record_freq),
+                             tf.range(num_records, dtype="int32"))
       insert_mask = tf.reshape(
           tf.cast(insert_mask, dtype="float32"),
-          [1, num_recorded_pred_x0, *([1] * len(shape[1:]))])
-      new_progress = insert_mask * pred_x0[:, tf.newaxis] + (
-          1. - insert_mask) * progress
-      return [i - 1, sample, new_progress]
+          [1, num_records, *([1] * len(shape[1:]))])
+      new_sample_progress = insert_mask * sample[:, tf.newaxis] + (
+          1. - insert_mask) * sample_progress
+      new_pred_x0_progress = insert_mask * pred_x0[:, tf.newaxis] + (
+          1. - insert_mask) * pred_x0_progress
 
-    _, img_final, xstartpreds_final = tf.nest.map_structure(
-      tf.stop_gradient,
-      tf.while_loop(
-      cond=lambda i, img, progress: tf.greater_equal(i, 0),
-      body=_loop_body,
-      loop_vars=[t, xt, progress],
-      shape_invariants=[t.shape, xt.shape, progress.shape],
-    ))
-    return img_final, xstartpreds_final
+      return [t - 1, sample, new_sample_progress, new_pred_x0_progress]
+
+    _, x_final, sample_prog_final, pred_x0_prog_final = tf.nest.map_structure(
+        tf.stop_gradient,
+        tf.while_loop(
+          cond=lambda t, _1, _2, _3: tf.greater_equal(t, 0),
+          body=_loop_body,
+          loop_vars=[t, xt, sample_progress, pred_x0_progress],
+          shape_invariants=[t.shape, xt.shape] + [sample_progress.shape] * 2
+        )
+    )
+    return x_final, sample_prog_final, pred_x0_prog_final
+
+
+class DDPMTrainer(_DDPM):
+  """DDPM trainer."""
+  def q_sample(self, x0, t, eps):
+    """Sample a noised version of `x0` (original image) according to `t` (
+    sampled time steps), i.e. `q(x_t | x_0)`. `t` contains integers sampled from
+    0, 1, ..., num_steps - 1, so 0 means 1 diffusion step, and so on.
+
+    Args:
+      x0 (Tensor): tensor of shape [batch_size, height, width, 3], the original
+        image.
+      t (Tensor): int tensor of shape [batch_size], time steps in a batch.
+      eps (Tensor): tensor of shape [batch_size, height, width, 3], noise from
+        prior distribution.
+
+    Returns:
+      xt (Tensor): tensor of shape [batch_size, height, width, 3], noised
+        version of `x0`.
+    """
+    xt = (
+        _extract(self._sqrt_alphas_cumprod, t) * x0 +
+        _extract(self._sqrt_one_minus_alphas_cumprod, t) * eps
+    )
+    return xt
 
   def compute_loss(self, x0):
     """Compute the mean squared error between noise and predicted noise as the
     loss.
 
     Args:
-      x0 (Tensor): 
+      x0 (Tensor): tensor of shape [batch_size, height, width, 3], the original
+        image.
 
     Returns:
-      loss (Tensor):
+      loss (Tensor): scalar tensor.
     """
     batch_size = tf.shape(x0)[0]
     t = tf.random.uniform((batch_size,), 0, self._num_steps, dtype="int32")
@@ -301,8 +343,25 @@ class DenoiseDiffusion(object):
             ckpt_path,
             persist_per_iterations,
             log_per_iterations=100,
-            logdir='log'
+            logdir="log",
     ):
+    """Perform training iterations.
+
+    Args:
+      dataset: a tf.data.Dataset instance, the input data generator.
+      optimizer: a tf.keras.optimizer.Optimizer instance, applies gradient
+        updates.
+      ckpt: a tf.train.Checkpoint instance, saves or load weights to/from
+        checkpoint file.
+      ckpt_path: string scalar, the path to the directory that the checkpoint
+        files will be written to or loaded from.
+      persist_per_iterations: int scalar, saves weights to checkpoint files
+        every `persist_per_iterations` iterations.
+      log_per_iterations: int scalar, prints log info every `log_per_iterations`
+        iterations.
+      logdir: string scalar, the directory that the tensorboard log data will
+        be written to.
+    """
     train_step_signature = [
         tf.TensorSpec(
             shape=dataset.element_spec.shape,
@@ -313,7 +372,7 @@ class DenoiseDiffusion(object):
     @tf.function(input_signature=train_step_signature)
     def train_step(images):
       with tf.GradientTape() as tape:
-        loss = self.compute_loss(images) 
+        loss = self.compute_loss(images)
 
       gradients = tape.gradient(loss, self._model.trainable_variables)
       optimizer.apply_gradients(
@@ -327,26 +386,234 @@ class DenoiseDiffusion(object):
 
     latest_ckpt = tf.train.latest_checkpoint(ckpt_path)
     if latest_ckpt:
-      print('Restoring from checkpoint: %s ...' % latest_ckpt)
+      print("Restoring from checkpoint: %s ..." % latest_ckpt)
       ckpt.restore(latest_ckpt)
     else:
-      print('Training from scratch...')
+      print("Training from scratch...")
 
-    for data in dataset: 
+    for data in dataset:
       loss, step, lr = train_step(data)
 
       with summary_writer.as_default():
-        tf.summary.scalar('train_loss', loss, step=step)
-        tf.summary.scalar('learning_rate', lr, step=step)
+        tf.summary.scalar("train_loss", loss, step=step)
+        tf.summary.scalar("learning_rate", lr, step=step)
 
       if step.numpy() % log_per_iterations == 0:
-        print('global step: %d, loss: %f, learning rate:' %
+        print("global step: %d, loss: %f, learning rate:" %
             (step.numpy(), loss.numpy()), lr.numpy())
         sys.stdout.flush()
       if step.numpy() % persist_per_iterations == 0:
-        print('Saving checkpoint at global step %d ...' % step.numpy())
-        ckpt.save(os.path.join(ckpt_path, 'ddpm'))
+        print("Saving checkpoint at global step %d ..." % step.numpy())
+        ckpt.save(os.path.join(ckpt_path, "ddpm"))
 
     optimizer.finalize_variable_values(self._model.trainable_variables)
-    ckpt.save(os.path.join(ckpt_path, "ddpm")) 
+    ckpt.save(os.path.join(ckpt_path, "ddpm"))
 
+
+
+class DDIMSampler(_DDPM):
+  """DDIM sample.
+
+  DDIM falls back to DDPM when num_ddim_steps := num_steps and eta := 1.
+
+  Ref: https://arxiv.org/abs/2010.02502
+       https://github.com/ermongroup/ddim/tree/main
+  """
+  def __init__(
+      self,
+      model,
+      num_ddim_steps=50,
+      eta=0.,
+      beta_start=0.0001,
+      beta_end=0.02,
+      num_steps=1000,
+      model_var_type="fixed_small",
+    ):
+    """Constructor.
+
+    Args:
+      model (Layer): the UNet model.
+      num_ddim_steps (int): number of DDIM steps.
+      eta (float): eta controls the stochasticity of the reverse process.
+      beta_start (float): start of beta schedule.
+      beta_end (float): end of beta schedule.
+      num_steps (int): the number of diffusion steps (`T`).
+      model_var_type (str): type of variances (`sigma^{2}_t`). "fixed_large"
+        refers to `beta_t`, and `fixed_small` refers to scaled `beta_t` that is
+        smaller. See Section 3.2 of DDPM paper.
+    """    
+    super(DDIMSampler, self).__init__(
+        model,
+        beta_start=beta_start,
+        beta_end=beta_end,
+        num_steps=num_steps,
+        model_var_type=model_var_type
+    )
+    self._num_ddim_steps = num_ddim_steps
+    self._eta = eta
+
+    self._ddim_steps = tf.range(
+        0, num_steps, num_steps // num_ddim_steps, dtype="int32"
+    )
+    self._ddim_steps_prev = tf.concat([[-1], self._ddim_steps[:-1]], axis=0)
+    self._alphas_cumprod = tf.math.cumprod(
+        1 - tf.concat([[0.], self._betas], axis=0), axis=0
+    )
+
+  def ddim_sample(self, xt, index, return_pred_x0=False):
+    """
+    Args:
+      xt (Tensor): tensor of shape [batch_size, height, width, 3], noised
+        version of `x0`.
+      index (Tensor): index of the time step into `ddim_steps` of the
+        subsequence used in DDIM. 
+      return_pred_x0 (bool): whether to return pred_x0.
+
+    Returns:
+      sample (Tensor): tensor of shape [batch_size, height, width, 3], a
+        less noisy version of `xt`.
+      pred_x0 (Tensor): tensor of shape [batch_size, height, width, 3], the
+        predicted `x0` in the process.
+    """
+    t = tf.fill([xt.shape[0]], self._ddim_steps[index])
+    t_prev = tf.fill([xt.shape[0]], self._ddim_steps_prev[index])
+
+
+    eps = self._model(xt, tf.cast(t, "float32"))
+    alphas_cumprod = _extract(self._alphas_cumprod, t + 1)
+    alphas_cumprod_prev = _extract(self._alphas_cumprod, t_prev + 1)
+
+    pred_x0 = (xt - eps * tf.sqrt(1 - alphas_cumprod)) / tf.sqrt(alphas_cumprod)
+    sigma = self._eta * tf.sqrt(
+        (1 - alphas_cumprod / alphas_cumprod_prev) *
+        (1 - alphas_cumprod_prev) / (1 - alphas_cumprod)
+    )
+    noise = tf.random.normal(xt.shape)
+    sample = tf.sqrt(alphas_cumprod_prev) * pred_x0 + tf.sqrt(
+        1 - alphas_cumprod_prev - sigma ** 2) * eps + sigma * noise
+
+    if return_pred_x0:
+      return sample, pred_x0
+    else:
+      return sample
+
+  def ddim_interpolate(self, shape, n=10):
+    """Run reverse process on latents evenly (using slerp) interpolated between
+    two latents `z1` and `z2`.
+
+    Args:
+      shape (list): shape of the latent variable.
+      n (int): number of interpolation intervals.
+ 
+    Returns:
+      x_final (Tensor): the final version of sampled images for interpolated
+        latents.
+    """
+    z1 = tf.random.normal(shape=[1] + shape)
+    z2 = tf.random.normal(shape=[1] + shape)
+    alphas = tf.cast(tf.range(n + 1), "float32") * 0.1
+    index = tf.size(alphas) - 1
+
+    z_inters = tf.zeros([0] + list(shape))
+    z_inters = tf.nest.map_structure(
+        tf.stop_gradient,
+        tf.while_loop(
+            cond=lambda index, _,: tf.greater_equal(index, 0),
+            body=lambda index, z_inters: (
+                index - 1,
+                tf.concat([slerp(z1, z2, alphas[index]), z_inters], axis=0)
+            ),
+            loop_vars=[index, z_inters],
+            shape_invariants=[[None] + index.shape[1:], z_inters]
+        ),
+    )[1]
+
+    x_final = self.ddim_p_sample_loop(xt=z_inters)
+    return x_final
+
+  def ddim_p_sample_loop(self, shape=None, xt=None):
+    """Sampling loop to generate samples according to batched image shape.
+
+    Args:
+      shape (tuple): shape of the image (i.e. [batch_size, height, width, 3])
+      xt (Tensor): latents of shape [batch_size, height, width, 3]
+
+    note: either `shape` or `xt` must be provided.
+    
+    Returns:
+      x_final (Tensor): tensor of shape [batch_size, height, width, 3], the
+        final version of sampled image.
+    """
+    assert not (shape is None and xt is None)
+    index = tf.size(self._ddim_steps) - 1
+    if shape is not None:
+      xt = tf.random.normal(shape)
+
+    x_final = tf.nest.map_structure(
+        tf.stop_gradient,
+        tf.while_loop(
+          cond=lambda index, _: tf.greater_equal(index, 0),
+          body=lambda index, xt: [
+              index - 1,
+              self.ddim_sample(
+                  xt=xt, index=index, return_pred_x0=False,
+              )
+          ],
+          loop_vars=[index, xt],
+          shape_invariants=[index.shape, xt.shape],
+        ),
+    )[1]
+    return x_final
+
+  def ddim_p_sample_loop_progressive(self, shape, record_freq=5):
+    """Same as `p_sample_loop`, except that we record the intermediate results
+    of sampling.
+
+    Args:
+      shape (tuple): shape of the image (i.e. [batch_size, height, width, 3])
+      record_freq (int): the frequence with which to store the intermediate
+        results.
+
+    Returns:
+      x_final (Tensor): tensor of shape [batch_size, height, width, 3], the
+        final version of sampled image.
+      sample_prog_final (Tensor): tensor of shape [batch_size, num_records,
+        height, width, 3], the records of intermediate samples (sampled
+        `x_{t-1}` from `xt` and `t`).
+      pred_x0_prog_final (Tensor): tensor of shape [batch_size, num_records,
+        height, width, 3], the records of predicted `x0`.
+    """
+    index = tf.size(self._ddim_steps) - 1
+    xt = tf.random.normal(shape)
+
+    num_records = tf.size(self._ddim_steps) // record_freq
+    sample_progress = tf.zeros(
+        [shape[0], num_records, *shape[1:]], dtype="float32")
+    pred_x0_progress = tf.zeros(
+        [shape[0], num_records, *shape[1:]], dtype="float32")
+
+    def _loop_body(index, xt, sample_progress, pred_x0_progress):
+      sample, pred_x0 = self.ddim_sample(
+        xt=xt, index=index, return_pred_x0=True)
+      insert_mask = tf.equal(tf.math.floordiv(index, record_freq),
+                             tf.range(num_records, dtype="int32"))
+      insert_mask = tf.reshape(
+          tf.cast(insert_mask, dtype="float32"),
+          [1, num_records, *([1] * len(shape[1:]))])
+      new_sample_progress = insert_mask * sample[:, tf.newaxis] + (
+          1. - insert_mask) * sample_progress
+      new_pred_x0_progress = insert_mask * pred_x0[:, tf.newaxis] + (
+          1. - insert_mask) * pred_x0_progress
+
+      return [index - 1, sample, new_sample_progress, new_pred_x0_progress]
+
+    _, x_final, sample_prog_final, pred_x0_prog_final = tf.nest.map_structure(
+        tf.stop_gradient,
+        tf.while_loop(
+          cond=lambda index, _1, _2, _3: tf.greater_equal(index, 0),
+          body=_loop_body,
+          loop_vars=[index, xt, sample_progress, pred_x0_progress],
+          shape_invariants=[index.shape, xt.shape] + [sample_progress.shape] * 2
+        )
+    )
+    return x_final, sample_prog_final, pred_x0_prog_final

@@ -188,18 +188,20 @@ class DownBlock(tf.keras.layers.Layer):
   `AttentionBlock` is used ONLY when the feature map size is in the tuple
   `attention_resolutions`.
   """
-  def __init__(self, num_channels, attention_resolutions):
+  def __init__(self, num_channels, attention_resolutions, dropout_rate):
     """Constructor.
 
     Args:
       num_channels (int): num of output channels.
       attention_resolutions (tuple): tuple of feature map size.
+      dropout_rate (float): dropout rate.
     """
     super(DownBlock, self).__init__()
     self._num_channels = num_channels
     self._attention_resolutions = attention_resolutions
+    self._dropout_rate = dropout_rate
 
-    self._res = ResidualBlock(num_channels)
+    self._res = ResidualBlock(num_channels, dropout_rate=dropout_rate)
     self._attention = AttentionBlock(num_channels)
 
   def call(self, inputs, time, training=False):
@@ -229,18 +231,20 @@ class UpBlock(tf.keras.layers.Layer):
   `AttentionBlock` is used ONLY when the feature map size is in the tuple
   `attention_resolutions`.
   """
-  def __init__(self, num_channels, attention_resolutions):
+  def __init__(self, num_channels, attention_resolutions, dropout_rate):
     """Constructor.
 
     Args:
       num_channels (int): num of output channels.
       attention_resolutions (tuple): tuple of feature map size.
+      dropout_rate (float): dropout rate.
     """
     super(UpBlock, self).__init__()
     self._num_channels = num_channels
     self._attention_resolutions = attention_resolutions
+    self._dropout_rate = dropout_rate
 
-    self._res = ResidualBlock(num_channels)
+    self._res = ResidualBlock(num_channels, dropout_rate=dropout_rate)
     self._attention = AttentionBlock(num_channels)
 
   def call(self, inputs, time, training=False):
@@ -267,16 +271,20 @@ class MiddleBlock(tf.keras.layers.Layer):
   """Middle block that wraps a `ResidualBlock`, `AttentionBlock` and another
   `ResidualBlock`.
   """
-  def __init__(self, num_channels):
+  def __init__(self, num_channels, dropout_rate):
     """Constructor.
 
     Args:
       num_channels (int): num of output channels.
+      dropout_rate (float): dropout rate.
     """
     super(MiddleBlock, self).__init__()
-    self._res1 = ResidualBlock(num_channels)
+    self._num_channels = num_channels
+    self._dropout_rate = dropout_rate
+
+    self._res1 = ResidualBlock(num_channels, dropout_rate=dropout_rate)
     self._attention = AttentionBlock(num_channels)
-    self._res2 = ResidualBlock(num_channels)
+    self._res2 = ResidualBlock(num_channels, dropout_rate=dropout_rate)
 
   def call(self, inputs, time, training=False):
     """Compute output tensor.
@@ -292,9 +300,9 @@ class MiddleBlock(tf.keras.layers.Layer):
       outputs (Tensor): output tensor of shape [batch_size, height, width,
         num_channels].
     """
-    outputs = self._res1(inputs, time)
+    outputs = self._res1(inputs, time, training=training)
     outputs = self._attention(outputs)
-    outputs = self._res2(outputs, time)
+    outputs = self._res2(outputs, time, training=training)
     return outputs
 
 
@@ -313,13 +321,12 @@ class Upsample(tf.keras.layers.Layer):
         num_channels, kernel_size=3, strides=1, padding="SAME"
     )
 
-  def call(self, inputs, time=None, training=False):
+  def call(self, inputs, time=None, training=None):
     """Compute output tensor.
 
     Args:
       inputs (Tensor): input tensor of shape [batch_size, height, width,
         num_channels].
-      training (bool): True if in training mode.
 
     Returns:
       outputs (Tensor): output tensor of shape [batch_size, out_height,
@@ -348,13 +355,12 @@ class Downsample(tf.keras.layers.Layer):
         num_channels, kernel_size=3, strides=2, padding="SAME"
     )
 
-  def call(self, inputs, time=None, training=False):
+  def call(self, inputs, time=None, training=None):
     """Compute output tensor.
 
     Args:
       inputs (Tensor): input tensor of shape [batch_size, height, width,
         num_channels].
-      training (bool): True if in training mode.
 
     Returns:
       outputs (Tensor): output tensor of shape [batch_size, out_height,
@@ -374,6 +380,7 @@ class UNet(tf.keras.layers.Layer):
       attention_resolutions=(16,),
       num_blocks=2,
       activation=tf.nn.swish,
+      dropout_rate=0.1,
     ):
     """Constructor.
 
@@ -388,6 +395,7 @@ class UNet(tf.keras.layers.Layer):
       num_blocks (int): num of times each `DownBlock` or `UpBlock` will be
         repeated.
       activation (callable or str): activation function.
+      dropout_rate (float): dropout rate.
     """
     super(UNet, self).__init__()
 
@@ -397,6 +405,7 @@ class UNet(tf.keras.layers.Layer):
     self._attention_resolutions = attention_resolutions
     self._num_blocks = num_blocks
     self._activation = activation
+    self._dropout_rate = dropout_rate
 
     num_resolutions = len(multipliers)
     channels_list = [num_channels * mul for mul in multipliers]
@@ -408,17 +417,19 @@ class UNet(tf.keras.layers.Layer):
     down = []
     for i in range(num_resolutions):
       for j in range(num_blocks):
-        down.append(DownBlock(channels_list[i], attention_resolutions))
+        down.append(
+            DownBlock(channels_list[i], attention_resolutions, dropout_rate))
       if i < num_resolutions - 1:
         down.append(Downsample(channels_list[i]))
 
     self._down = down
-    self._middle = MiddleBlock(channels_list[-1])
+    self._middle = MiddleBlock(channels_list[-1], dropout_rate)
 
     up = []
     for i in reversed(range(num_resolutions)):
       for j in range(num_blocks + 1):
-        up.append(UpBlock(channels_list[i], attention_resolutions))
+        up.append(
+            UpBlock(channels_list[i], attention_resolutions, dropout_rate))
       if i > 0:
         up.append(Upsample(channels_list[i]))
     self._up = up
@@ -449,7 +460,7 @@ class UNet(tf.keras.layers.Layer):
       outputs = m(outputs, time, training=training)
       hiddens.append(outputs)
 
-    outputs = self._middle(outputs, time)
+    outputs = self._middle(outputs, time, training=training)
 
     for m in self._up:
       if isinstance(m, Upsample):

@@ -59,5 +59,5 @@ for training your own DDPM model.
 </p>
 
 
-See [more samples]("samples/")
+See [more samples](samples/)
 

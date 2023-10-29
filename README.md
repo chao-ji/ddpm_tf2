@@ -39,6 +39,7 @@ Set `--use_ddim` to `True` to sample with DDIM
 
 You can get pretty decent results with default parameters (`eta` being 0 and `ddim_steps` being 50). Or you can try larger `eta` values up to 1.0, and `ddim_steps` up to 1000 (This is when DDIM fall backs to DDPM).  
 
+Set `--interpolate` to `True` to generate images using latents that are evenly interpolated between two independent latent noises
 
 ### Training
 Run
@@ -53,9 +54,39 @@ for training your own DDPM model.
   <img src="assets/celeb.png" width="1200">
 
   <br>
-  Progressive sampling of CelebaHQ 256
+  Progressive sampling of CelebaHQ images
 </p>
 
 
+<p align="center">
+  <img src="assets/bedroom.png" width="1200">
+
+  <br>
+  Progressive sampling of LSUN bedroom images
+</p>
 
 
+<p align="center">
+  <img src="assets/church.png" width="1200">
+
+  <br>
+  Progressive sampling of LSUN church images
+</p>
+
+
+<p align="center">
+  <img src="assets/cat.png" width="1200">
+
+  <br>
+  Progressive sampling of LSUN cat images
+</p>
+
+Note: for each series of progressive samples (4 in each dataset), the first row is the progressively denoised image, while the second row is the predicted original image.
+
+
+<p align="center">
+  <img src="assets/interpolate.png" width="1200">
+
+  <br>
+  Samples generated from interpolated latents using DDIM.
+</p>

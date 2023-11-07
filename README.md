@@ -57,7 +57,7 @@ for training your own DDPM model.
 ### Samples of generated images
 
 <p align="center">
-  <img src="samples/cifar10.jpg" width="1200">
+  <img src="samples/cifar10.png" width="1200">
 
   <br>
   Samples of CIFAR10 images

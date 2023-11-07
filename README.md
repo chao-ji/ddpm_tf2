@@ -65,7 +65,7 @@ for training your own DDPM model.
 </p>
 
 <p align="center">
-  <img src="samples/celebahq256.jpg" width="1200">
+  <img src="samples/celebahq.png" width="1200">
 
   <br>
   Samples of CelebAHQ images

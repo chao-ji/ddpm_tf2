@@ -4,10 +4,8 @@ import tensorflow as tf
 
 import glob
 
-flip = True
-batch_size = 4
 
-SHUFFLE_SIZE = 8192 
+SHUFFLE_SIZE = 8192
 
 def create_celebeahq256_dataset(dir_paths, image_size, batch_size, epochs=16, flip=False):
   """Create dataset for celeba hq dataset or LSUN dataset."""

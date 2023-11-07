@@ -227,10 +227,10 @@ class DDPMSampler(_DDPM):
         tf.while_loop(
           cond=lambda t, _: tf.greater_equal(t, 0),
           body=lambda t, xt: [
-              t - 1,
-              self.p_sample(
-                  xt=xt, t=tf.fill([shape[0]], t), return_pred_x0=False,
-              )
+            t - 1,
+            self.p_sample(
+              xt=xt, t=tf.fill([shape[0]], t), return_pred_x0=False,
+            )
           ],
           loop_vars=[t, xt],
           shape_invariants=[t.shape, xt.shape],
@@ -364,8 +364,8 @@ class DDPMTrainer(_DDPM):
     """
     train_step_signature = [
         tf.TensorSpec(
-            shape=dataset.element_spec.shape,
-            dtype=dataset.element_spec.dtype,
+          shape=dataset.element_spec.shape,
+          dtype=dataset.element_spec.dtype,
         ),
     ]
 
@@ -408,7 +408,6 @@ class DDPMTrainer(_DDPM):
 
     optimizer.finalize_variable_values(self._model.trainable_variables)
     ckpt.save(os.path.join(ckpt_path, "ddpm"))
-
 
 
 class DDIMSampler(_DDPM):
@@ -478,7 +477,6 @@ class DDIMSampler(_DDPM):
     t = tf.fill([xt.shape[0]], self._ddim_steps[index])
     t_prev = tf.fill([xt.shape[0]], self._ddim_steps_prev[index])
 
-
     eps = self._model(xt, tf.cast(t, "float32"))
     alphas_cumprod = _extract(self._alphas_cumprod, t + 1)
     alphas_cumprod_prev = _extract(self._alphas_cumprod, t_prev + 1)
@@ -518,13 +516,13 @@ class DDIMSampler(_DDPM):
     z_inters = tf.nest.map_structure(
         tf.stop_gradient,
         tf.while_loop(
-            cond=lambda index, _,: tf.greater_equal(index, 0),
-            body=lambda index, z_inters: (
-                index - 1,
-                tf.concat([slerp(z1, z2, alphas[index]), z_inters], axis=0)
-            ),
-            loop_vars=[index, z_inters],
-            shape_invariants=[[None] + index.shape[1:], z_inters]
+          cond=lambda index, _,: tf.greater_equal(index, 0),
+          body=lambda index, z_inters: (
+            index - 1,
+            tf.concat([slerp(z1, z2, alphas[index]), z_inters], axis=0)
+          ),
+          loop_vars=[index, z_inters],
+          shape_invariants=[[None] + index.shape[1:], z_inters]
         ),
     )[1]
 
@@ -554,10 +552,10 @@ class DDIMSampler(_DDPM):
         tf.while_loop(
           cond=lambda index, _: tf.greater_equal(index, 0),
           body=lambda index, xt: [
-              index - 1,
-              self.ddim_sample(
-                  xt=xt, index=index, return_pred_x0=False,
-              )
+            index - 1,
+            self.ddim_sample(
+              xt=xt, index=index, return_pred_x0=False,
+            )
           ],
           loop_vars=[index, xt],
           shape_invariants=[index.shape, xt.shape],

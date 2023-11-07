@@ -1,13 +1,19 @@
 # TensorFlow2 Implementation of Denoising Diffusion Probabilistic Model
 
 
-This is a TensorFlow2 implementation (tested on version 2.13.0) of **Denoising Diffusion Probabilistic Model** ([paper](https://arxiv.org/abs/2006.11239) and [official TF1 implementation](https://github.com/hojonathanho/diffusion)). You can also generate samples with [DDIM](https://arxiv.org/abs/2010.02502) (Denoising Diffusion Implicity Model)
+This is a TensorFlow2 implementation (tested on version 2.13.0) of **Denoising Diffusion Probabilistic Model** ([paper](https://arxiv.org/abs/2006.11239) and [official TF1 implementation](https://github.com/hojonathanho/diffusion)).
+
+Features:
+
+* Can sample images using original checkpoint files (after converting to TF2 format)
+* Full training and sampling workflow 
+* Can generate samples with both DDPM and [DDIM](https://arxiv.org/abs/2010.02502) (with interpolation on latent variables)
 
 ## Quick Start
 
 Clone this repo
-```
-git clone git@github.com:chao-ji/ddpm\_tf2.git
+```bash
+git clone git@github.com:chao-ji/ddpm_tf2.git
 ```
 
 ### Sampling
@@ -55,6 +61,14 @@ for training your own DDPM model.
 
   <br>
   Samples of CIFAR10 images
+
+</p>
+
+<p align="center">
+  <img src="samples/celebahq256.jpg" width="1200">
+
+  <br>
+  Samples of CelebAHQ images
 
 </p>
 
